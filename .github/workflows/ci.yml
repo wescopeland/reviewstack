@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Format check
+        run: make fmt-check
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: ./...
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+      - name: Smoke test
+        run: make smoke
+
+      - name: Vulnerability scan
+        run: make vuln
+
+      - name: Module tidy check
+        run: make mod-check

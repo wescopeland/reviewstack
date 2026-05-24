@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      charm:
+        patterns:
+          - "github.com/charmbracelet/*"
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
