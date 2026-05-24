@@ -14,12 +14,17 @@ const (
 	DefaultTargetRef  = "HEAD"
 )
 
+const (
+	claudeAestheticPrompt  = "/aesthetic-review Review {{target_description}} using the Reviewstack inputs. Ignore any empty local git diff from the slash-command context; the captured diff is the source of truth. Read {{inputs}}/context.json, {{inputs}}/diff.patch, and {{inputs}}/diff-stat.txt, then write a markdown review to stdout with findings, severity, concrete fixes, and file/line references where possible."
+	claudeAnalyticalPrompt = "/analytical-review Review {{target_description}} using the Reviewstack inputs. Ignore any empty local git diff from the slash-command context; the captured diff is the source of truth. Read {{inputs}}/context.json, {{inputs}}/diff.patch, and {{inputs}}/diff-stat.txt, then write a markdown review to stdout with findings, severity, concrete fixes, and file/line references where possible."
+)
+
 var DefaultReviewerIDs = []string{
 	"claude-aesthetic",
 	"claude-analytical",
 	"codex-medium",
 	"codex-xhigh",
-	"cursor-thermo",
+	"claude-thermo",
 }
 
 type Config struct {
@@ -28,7 +33,7 @@ type Config struct {
 }
 
 // Placeholders expanded at runtime: {{run_dir}} {{inputs}} {{workspace}}
-// {{base}} {{target}} {{pr}} {{final}}
+// {{base}} {{target}} {{pr}} {{final}} {{target_description}} {{review_target_flags}}
 
 type Reviewer struct {
 	ID      string   `yaml:"id"`
@@ -115,18 +120,19 @@ func Default() *Config {
 			{
 				ID:      "claude-aesthetic",
 				Command: "claude",
-				Args:    []string{"--print", "--permission-mode", "dontAsk", "/aesthetic-review", "{{pr}}"},
+				Args:    []string{"--print", "--permission-mode", "dontAsk", claudeAestheticPrompt},
 			},
 			{
 				ID:      "claude-analytical",
 				Command: "claude",
-				Args:    []string{"--print", "--permission-mode", "dontAsk", "/analytical-review", "{{pr}}"},
+				Args:    []string{"--print", "--permission-mode", "dontAsk", claudeAnalyticalPrompt},
 			},
 			{
 				ID:      "codex-medium",
 				Command: "codex",
 				Args: []string{
 					"review",
+					"{{review_target_flags}}",
 					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 					"-c", `model="gpt-5.5"`, "-c", `model_reasoning_effort="medium"`, "-c", `service_tier="fast"`,
 				},
@@ -136,16 +142,17 @@ func Default() *Config {
 				Command: "codex",
 				Args: []string{
 					"review",
+					"{{review_target_flags}}",
 					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 					"-c", `model="gpt-5.5"`, "-c", `model_reasoning_effort="xhigh"`, "-c", `service_tier="fast"`,
 				},
 			},
 			{
-				ID:      "cursor-thermo",
-				Command: "cursor-agent",
+				ID:      "claude-thermo",
+				Command: "claude",
 				Args: []string{
-					"--print", "--trust", "--force", "--model", "composer-2.5-fast", "--output-format", "text",
-					"Thermonuclear maintainability review for PR {{pr}} against {{base}}. Read {{inputs}}/diff.patch, {{inputs}}/context.json, and {{inputs}}/diff-stat.txt. Focus on coupling, abstraction depth, naming, and long-term maintainability. Write markdown to stdout.",
+					"--print", "--permission-mode", "dontAsk", "--model", "opus", "--output-format", "text",
+					"Thermonuclear maintainability review of {{target_description}}. Read {{inputs}}/diff.patch, {{inputs}}/context.json, and {{inputs}}/diff-stat.txt. Focus on coupling, abstraction depth, naming, and long-term maintainability. Write markdown to stdout.",
 				},
 			},
 		},

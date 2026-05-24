@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/wescopeland/reviewstack/internal/config"
 )
 
 type Check struct {
@@ -21,15 +23,22 @@ func Run(w io.Writer) int {
 		checkTool("go", "version"),
 		checkTool("git", "version"),
 		checkTool("gh", "version"),
-		checkTool("claude", "-v"),
-		checkTool("codex", "--version"),
-		checkTool("cursor-agent", "--version"),
-		checkAuth("codex", "codex", "doctor"),
-		checkAuth("cursor-agent", "cursor-agent", "status"),
-		checkGhAuth(),
-		checkClaudeSkills(),
-		checkCodexMCP(),
-		checkConfig(),
+	}
+
+	cfg, cfgErr := loadConfig()
+	checks = append(checks, checkGhAuth())
+	if cfgErr != nil {
+		checks = append(checks, Check{Name: "config", Status: "fail", Detail: cfgErr.Error()})
+	} else {
+		checks = append(checks, configuredToolChecks(cfg)...)
+		checks = append(checks, configuredAuthChecks(cfg)...)
+		if needsClaudeSkills(cfg) {
+			checks = append(checks, checkClaudeSkills())
+		}
+		if usesCommand(cfg, "codex") {
+			checks = append(checks, checkCodexMCP())
+		}
+		checks = append(checks, checkConfig())
 	}
 
 	failures := 0
@@ -57,6 +66,58 @@ func Run(w io.Writer) int {
 		_, _ = fmt.Fprintln(w, "Fix failures above, then run: reviewstack --pr <n>")
 	}
 	return failures
+}
+
+func loadConfig() (*config.Config, error) {
+	for _, p := range []string{".reviewstack/config.yaml", ".reviewstack/config.yml"} {
+		if _, err := os.Stat(p); err == nil {
+			return config.Load(p)
+		}
+	}
+	return config.Default(), nil
+}
+
+func configuredToolChecks(cfg *config.Config) []Check {
+	var checks []Check
+	if usesCommand(cfg, "claude") {
+		checks = append(checks, checkTool("claude", "-v"))
+	}
+	if usesCommand(cfg, "codex") {
+		checks = append(checks, checkTool("codex", "--version"))
+	}
+	return checks
+}
+
+func configuredAuthChecks(cfg *config.Config) []Check {
+	var checks []Check
+	if usesCommand(cfg, "codex") {
+		checks = append(checks, checkAuth("codex", "codex", "doctor"))
+	}
+	return checks
+}
+
+func usesCommand(cfg *config.Config, name string) bool {
+	for _, r := range cfg.Reviewers {
+		if filepath.Base(r.Command) == name {
+			return true
+		}
+	}
+	return filepath.Base(cfg.Synthesis.Command) == name
+}
+
+func needsClaudeSkills(cfg *config.Config) bool {
+	for _, r := range cfg.Reviewers {
+		if filepath.Base(r.Command) != "claude" {
+			continue
+		}
+		for _, arg := range r.Args {
+			if strings.HasPrefix(strings.TrimSpace(arg), "/aesthetic-review") ||
+				strings.HasPrefix(strings.TrimSpace(arg), "/analytical-review") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkTool(name string, args ...string) Check {
@@ -191,8 +252,6 @@ func authHint(name string) string {
 		return "Run: claude login (or set ANTHROPIC_API_KEY)"
 	case "codex":
 		return "Run: codex login"
-	case "cursor-agent":
-		return "Run: cursor-agent login"
 	default:
 		return "Authenticate with " + name
 	}

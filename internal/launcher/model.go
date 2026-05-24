@@ -17,10 +17,22 @@ const (
 	screenMode screen = iota
 	screenPRList
 	screenPRManual
-	screenRereviewPRList
-	screenRereviewPRManual
 	screenBranch
 )
+
+type modeMenuItem struct {
+	title       string
+	description string
+	rereview    bool
+	mode        cli.ReviewMode
+}
+
+var modeMenuItems = []modeMenuItem{
+	{title: "Pull request", description: "review an open PR", mode: cli.ModePR},
+	{title: "Re-review PR", description: "check your prior feedback against updates", rereview: true, mode: cli.ModePR},
+	{title: "Uncommitted", description: "staged + unstaged local changes", mode: cli.ModeUncommitted},
+	{title: "Branch diff", description: "compare against a base ref", mode: cli.ModeBranch},
+}
 
 type prsLoadedMsg struct {
 	items []PRItem
@@ -118,7 +130,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
-			if m.screen == screenMode || m.screen == screenPRList || m.screen == screenRereviewPRList {
+			if m.screen == screenMode || m.screen == screenPRList {
 				m.cancelled = true
 				m.done = true
 				return m, tea.Quit
@@ -141,12 +153,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected++
 			}
 		case "n":
-			if m.screen == screenPRList || m.screen == screenRereviewPRList {
-				if m.screen == screenPRList {
-					m.screen = screenPRManual
-				} else {
-					m.screen = screenRereviewPRManual
-				}
+			if m.screen == screenPRList {
+				m.screen = screenPRManual
 				m.manualInput.SetValue("")
 				return m, m.manualInput.Focus()
 			}
@@ -158,7 +166,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.baseInput, cmd = m.baseInput.Update(msg)
 		return m, cmd
 	}
-	if m.screen == screenPRManual || m.screen == screenRereviewPRManual {
+	if m.screen == screenPRManual {
 		var cmd tea.Cmd
 		m.manualInput, cmd = m.manualInput.Update(msg)
 		return m, cmd
@@ -170,8 +178,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) maxSelected() int {
 	switch m.screen {
 	case screenMode:
-		return 3
-	case screenPRList, screenRereviewPRList:
+		return len(modeMenuItems) - 1
+	case screenPRList:
 		if len(m.prs) == 0 {
 			return 0
 		}
@@ -194,35 +202,29 @@ func (m *Model) menuWidth() int {
 func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenMode:
-		switch m.selected {
-		case 0:
-			m.rereview = false
+		if m.selected < 0 || m.selected >= len(modeMenuItems) {
+			return m, nil
+		}
+		item := modeMenuItems[m.selected]
+		switch item.mode {
+		case cli.ModePR:
+			m.rereview = item.rereview
 			m.screen = screenPRList
 			m.selected = 0
 			m.prsLoading = true
 			return m, loadPRs
-		case 1:
-			m.rereview = true
-			m.screen = screenRereviewPRList
-			m.selected = 0
-			m.prsLoading = true
-			return m, loadPRs
-		case 2:
+		case cli.ModeUncommitted:
 			m.result = Result{Mode: cli.ModeUncommitted, Uncommitted: true, Base: "HEAD", Target: "working tree"}
 			m.done = true
 			return m, tea.Quit
-		case 3:
+		case cli.ModeBranch:
 			m.screen = screenBranch
 			return m, m.baseInput.Focus()
 		}
 
-	case screenPRList, screenRereviewPRList:
+	case screenPRList:
 		if len(m.prs) == 0 {
-			if m.screen == screenPRList {
-				m.screen = screenPRManual
-			} else {
-				m.screen = screenRereviewPRManual
-			}
+			m.screen = screenPRManual
 			return m, m.manualInput.Focus()
 		}
 		if m.selected >= len(m.prs) {
@@ -249,7 +251,7 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.done = true
 		return m, tea.Quit
 
-	case screenPRManual, screenRereviewPRManual:
+	case screenPRManual:
 		n, err := strconv.Atoi(strings.TrimSpace(m.manualInput.Value()))
 		if err != nil || n <= 0 {
 			m.errMsg = "enter a valid PR number"
@@ -296,9 +298,9 @@ func (m *Model) View() string {
 	switch m.screen {
 	case screenMode:
 		sections = append(sections, m.renderModeMenu())
-	case screenPRList, screenRereviewPRList:
+	case screenPRList:
 		sections = append(sections, m.renderPRList())
-	case screenPRManual, screenRereviewPRManual:
+	case screenPRManual:
 		sections = append(sections, m.renderPRManual())
 	case screenBranch:
 		sections = append(sections, m.renderBranch())
@@ -338,15 +340,9 @@ func (m *Model) renderMenuLine(selected bool, primary, secondary string) string 
 }
 
 func (m *Model) renderModeMenu() string {
-	items := []struct{ title, desc string }{
-		{"Pull request", "review an open PR"},
-		{"Re-review PR", "check your prior feedback against updates"},
-		{"Uncommitted", "staged + unstaged local changes"},
-		{"Branch diff", "compare against a base ref"},
-	}
-	lines := make([]string, len(items))
-	for i, item := range items {
-		lines[i] = m.renderMenuLine(i == m.selected, item.title, item.desc)
+	lines := make([]string, len(modeMenuItems))
+	for i, item := range modeMenuItems {
+		lines[i] = m.renderMenuLine(i == m.selected, item.title, item.description)
 	}
 	return lipgloss.NewStyle().Width(m.menuWidth()).Render(strings.Join(lines, "\n"))
 }
@@ -400,9 +396,9 @@ func (m *Model) renderHelp() string {
 	switch m.screen {
 	case screenMode:
 		return helpStyle.Render(keyStyle.Render("↑↓") + " select  " + keyStyle.Render("enter") + " continue  " + keyStyle.Render("q") + " quit")
-	case screenPRList, screenRereviewPRList:
+	case screenPRList:
 		return helpStyle.Render(keyStyle.Render("↑↓") + " select  " + keyStyle.Render("enter") + " review  " + keyStyle.Render("n") + " type number  " + keyStyle.Render("esc") + " back")
-	case screenPRManual, screenRereviewPRManual, screenBranch:
+	case screenPRManual, screenBranch:
 		return helpStyle.Render(keyStyle.Render("enter") + " start  " + keyStyle.Render("esc") + " back")
 	default:
 		return ""

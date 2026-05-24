@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ type Context struct {
 	Target    string
 	PR        int
 	Final     string
+	// Mode is one of "pr", "uncommitted", or "branch".
+	Mode string
 }
 
 func NewContext(workspace, runDir, base, target string, pr int) Context {
@@ -26,19 +29,23 @@ func NewContext(workspace, runDir, base, target string, pr int) Context {
 		Target:    target,
 		PR:        pr,
 		Final:     filepath.Join(runDir, FinalReview),
+		Mode:      "pr",
 	}
 }
 
 func (c Context) ExpandArgs(args []string) []string {
-	out := make([]string, len(args))
-	for i, a := range args {
-		out[i] = c.Expand(a)
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		expanded := c.Expand(a)
+		if expanded != "" {
+			out = append(out, expanded)
+		}
 	}
 	return out
 }
 
 func (c Context) Expand(s string) string {
-	pr := "current"
+	pr := ""
 	if c.PR > 0 {
 		pr = strconv.Itoa(c.PR)
 	}
@@ -50,6 +57,29 @@ func (c Context) Expand(s string) string {
 		"{{target}}", c.Target,
 		"{{pr}}", pr,
 		"{{final}}", c.Final,
+		"{{target_description}}", c.targetDescription(),
+		"{{review_target_flags}}", c.reviewTargetFlags(),
 	)
 	return repl.Replace(s)
+}
+
+func (c Context) targetDescription() string {
+	switch c.Mode {
+	case "uncommitted":
+		return "uncommitted local changes"
+	case "branch":
+		return fmt.Sprintf("committed changes against %s", c.Base)
+	default:
+		if c.PR > 0 {
+			return fmt.Sprintf("PR %d against %s", c.PR, c.Base)
+		}
+		return fmt.Sprintf("changes against %s", c.Base)
+	}
+}
+
+func (c Context) reviewTargetFlags() string {
+	if c.Mode == "uncommitted" {
+		return "--uncommitted"
+	}
+	return ""
 }

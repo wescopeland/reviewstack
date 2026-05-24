@@ -34,9 +34,9 @@ Reviewers run from the **repo root** you invoke from. Outputs go to `.reviewstac
 | `--fake-reviewers` | built-in fakes for dev (`make run-fake`) |
 | `--no-launcher` | skip mode picker; require flags |
 
-Needs `gh` for PR mode, plus whatever your config invokes (`claude`, `codex`, `cursor-agent`, etc.). Copy and edit `.reviewstack/config.yaml` — placeholders: `{{base}}`, `{{pr}}`, `{{inputs}}`, `{{workspace}}`, `{{final}}`.
+Needs `gh` for PR mode, plus whatever your config invokes (`claude`, `codex`, etc.). Copy and edit `.reviewstack/config.yaml` — placeholders: `{{base}}`, `{{pr}}`, `{{target_description}}`, `{{review_target_flags}}`, `{{inputs}}`, `{{workspace}}`, `{{final}}`.
 
-Reviewer ids: `claude-aesthetic`, `claude-analytical`, `codex-medium`, `codex-xhigh`, `cursor-thermo`.
+Reviewer ids: `claude-aesthetic`, `claude-analytical`, `codex-medium`, `codex-xhigh`, `claude-thermo`.
 
 ## TUI
 

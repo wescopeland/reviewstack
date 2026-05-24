@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,99 +39,175 @@ func Gather(dir string, opts Options) error {
 		return err
 	}
 
+	switch {
+	case opts.Uncommitted || opts.Mode == cli.ModeUncommitted:
+		return gatherForUncommitted(dir, opts)
+	case opts.PR > 0:
+		return gatherForPR(dir, opts)
+	case opts.Mode == cli.ModeBranch:
+		return gatherForBranch(dir, opts)
+	default:
+		return gatherForBranch(dir, opts)
+	}
+}
+
+func gatherForUncommitted(dir string, opts Options) error {
+	ctx := Context{
+		Mode:   "uncommitted",
+		Base:   "HEAD",
+		Target: "working tree",
+		Branch: currentBranch(),
+	}
+	if err := writeContext(dir, ctx); err != nil {
+		return err
+	}
+	statPath := filepath.Join(dir, "diff-stat.txt")
+	diffPath := filepath.Join(dir, "diff.patch")
+	return gatherUncommitted(dir, statPath, diffPath)
+}
+
+func gatherForPR(dir string, opts Options) error {
 	base := opts.Base
 	target := opts.Target
-	ctx := Context{Base: base, Target: target, URL: opts.PRURL}
+	ctx := Context{Base: base, Target: target, URL: opts.PRURL, PR: opts.PR, Mode: "pr"}
 
-	if opts.Uncommitted {
-		ctx.Mode = "uncommitted"
-		ctx.Base = "HEAD"
-		ctx.Target = "working tree"
-		ctx.Branch = currentBranch()
-	} else if opts.Mode == cli.ModeBranch {
-		ctx.Mode = "branch"
-		ctx.Branch = currentBranch()
-	} else if opts.PR > 0 {
-		ctx.PR = opts.PR
-		if meta, err := fetchPRMeta(opts.PR); err == nil {
-			ctx.Repo = meta.Repo
-			ctx.Title = meta.Title
-			ctx.URL = meta.URL
-			if meta.BaseRef != "" {
-				ctx.Base = meta.BaseRef
-				base = meta.BaseRef
-			}
-			if meta.HeadRef != "" {
-				ctx.Target = meta.HeadRef
-				target = meta.HeadRef
-			}
+	if meta, err := fetchPRMeta(opts.PR); err == nil {
+		ctx.Repo = meta.Repo
+		ctx.Title = meta.Title
+		ctx.URL = meta.URL
+		if meta.BaseRef != "" {
+			ctx.Base = meta.BaseRef
+			base = meta.BaseRef
+		}
+		if meta.HeadRef != "" {
+			ctx.Target = meta.HeadRef
+			target = meta.HeadRef
 		}
 	}
 
+	if err := writeContext(dir, ctx); err != nil {
+		return err
+	}
+
+	statPath := filepath.Join(dir, "diff-stat.txt")
+	diffPath := filepath.Join(dir, "diff.patch")
+	if err := writePRDiffStat(statPath, opts.PR, base, target); err != nil {
+		return err
+	}
+	if err := writePRDiff(diffPath, opts.PR, base, target); err != nil {
+		return err
+	}
+	return writePRJSON(dir, opts.PR)
+}
+
+func gatherForBranch(dir string, opts Options) error {
+	ctx := Context{
+		Mode:   "branch",
+		Base:   opts.Base,
+		Target: opts.Target,
+		Branch: currentBranch(),
+	}
+	if err := writeContext(dir, ctx); err != nil {
+		return err
+	}
+
+	statPath := filepath.Join(dir, "diff-stat.txt")
+	diffPath := filepath.Join(dir, "diff.patch")
+	if err := writeCommand(statPath, "git", "diff", "--stat", opts.Base+"..."+opts.Target); err != nil {
+		return err
+	}
+	return writeCommand(diffPath, "git", "diff", opts.Base+"..."+opts.Target)
+}
+
+func writeContext(dir string, ctx Context) error {
 	if err := writeJSON(filepath.Join(dir, "context.json"), ctx); err != nil {
 		return err
 	}
-	if err := writeCommand(filepath.Join(dir, "git-status.txt"), "git", "status", "--short"); err != nil {
-		return err
-	}
-
-	diffPath := filepath.Join(dir, "diff.patch")
-	statPath := filepath.Join(dir, "diff-stat.txt")
-
-	if opts.Uncommitted {
-		return gatherUncommitted(dir, statPath, diffPath)
-	}
-
-	if opts.PR > 0 {
-		if err := writePRDiffStat(statPath, opts.PR, base, target); err != nil {
-			return err
-		}
-		if err := writePRDiff(diffPath, opts.PR, base, target); err != nil {
-			return err
-		}
-	} else {
-		if err := writeCommand(statPath, "git", "diff", "--stat", base+"..."+target); err != nil {
-			return err
-		}
-		if err := writeCommand(diffPath, "git", "diff", base+"..."+target); err != nil {
-			return err
-		}
-	}
-
-	if opts.PR > 0 {
-		if err := writeCommand(filepath.Join(dir, "pr.json"), "gh", "pr", "view", fmt.Sprint(opts.PR), "--json", "number,title,url,baseRefName,headRefName,author,files"); err != nil {
-			_ = writeJSON(filepath.Join(dir, "pr.json"), map[string]any{
-				"number": opts.PR,
-				"note":   "gh pr view failed",
-				"error":  err.Error(),
-			})
-		}
-	}
-	return nil
+	return writeCommand(filepath.Join(dir, "git-status.txt"), "git", "status", "--short")
 }
 
+// gatherUncommitted captures staged, unstaged, and untracked changes without mutating
+// the user's real git index by copying it to a temporary GIT_INDEX_FILE first.
 func gatherUncommitted(dir, statPath, diffPath string) error {
 	untracked, err := listUntrackedFiles()
 	if err != nil {
 		return err
 	}
+
+	indexPath, cleanup, err := tempGitIndexCopy()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
 	if len(untracked) > 0 {
 		args := append([]string{"add", "-N", "--"}, untracked...)
-		if err := runGit(args...); err != nil {
+		if err := runGitWithEnv(env, args...); err != nil {
 			return err
 		}
-		defer resetIntentToAdd(untracked)
-
 		content := strings.Join(untracked, "\n") + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "untracked-files.txt"), []byte(content), 0o644); err != nil {
 			return err
 		}
 	}
 
-	if err := writeCommand(statPath, "git", "diff", "--stat", "HEAD"); err != nil {
+	if err := writeCommandWithEnv(env, statPath, "git", "diff", "--stat", "HEAD"); err != nil {
 		return err
 	}
-	return writeCommand(diffPath, "git", "diff", "HEAD")
+	return writeCommandWithEnv(env, diffPath, "git", "diff", "HEAD")
+}
+
+func tempGitIndexCopy() (path string, cleanup func(), err error) {
+	gitDir, err := gitCommonDir()
+	if err != nil {
+		return "", nil, err
+	}
+	src := filepath.Join(gitDir, "index")
+	tmp, err := os.CreateTemp("", "reviewstack-index-*")
+	if err != nil {
+		return "", nil, err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+
+	srcFile, err := os.Open(src)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", nil, fmt.Errorf("open git index: %w", err)
+	}
+	defer func() { _ = srcFile.Close() }()
+	dstFile, err := os.Create(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return "", nil, err
+	}
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		_ = dstFile.Close()
+		_ = os.Remove(tmpPath)
+		return "", nil, err
+	}
+	if err := dstFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", nil, err
+	}
+	return tmpPath, func() { _ = os.Remove(tmpPath) }, nil
+}
+
+func gitCommonDir() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --git-common-dir: %w", err)
+	}
+	dir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(dir) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(wd, dir)
+	}
+	return dir, nil
 }
 
 func listUntrackedFiles() ([]string, error) {
@@ -145,8 +222,9 @@ func listUntrackedFiles() ([]string, error) {
 	return lines, nil
 }
 
-func runGit(args ...string) error {
+func runGitWithEnv(env []string, args ...string) error {
 	cmd := exec.Command("git", args...)
+	cmd.Env = env
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -159,9 +237,31 @@ func runGit(args ...string) error {
 	return nil
 }
 
-func resetIntentToAdd(files []string) {
-	args := append([]string{"reset", "--"}, files...)
-	_ = exec.Command("git", args...).Run()
+func writeCommandWithEnv(env []string, path, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, msg)
+	}
+	return os.WriteFile(path, stdout.Bytes(), 0o644)
+}
+
+func writePRJSON(dir string, pr int) error {
+	if err := writeCommand(filepath.Join(dir, "pr.json"), "gh", "pr", "view", fmt.Sprint(pr), "--json", "number,title,url,baseRefName,headRefName,author,files"); err != nil {
+		return writeJSON(filepath.Join(dir, "pr.json"), map[string]any{
+			"number": pr,
+			"note":   "gh pr view failed",
+			"error":  err.Error(),
+		})
+	}
+	return nil
 }
 
 func writePRDiffStat(path string, pr int, base, target string) error {

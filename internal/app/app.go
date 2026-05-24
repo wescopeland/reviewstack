@@ -22,8 +22,9 @@ import (
 )
 
 type App struct {
-	opts *cli.Options
-	cfg  *config.Config
+	opts      *cli.Options
+	cfg       *config.Config
+	workspace string
 }
 
 func New(opts *cli.Options) *App {
@@ -31,6 +32,12 @@ func New(opts *cli.Options) *App {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+	a.workspace = wd
+
 	cfg, err := a.loadConfig()
 	if err != nil {
 		return err
@@ -45,7 +52,6 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	reviewers = config.AdaptReviewers(reviewers, a.opts.Mode == cli.ModeUncommitted)
 	ids := reviewerIDs(reviewers)
 
 	if !a.opts.FakeReviewers {
@@ -64,7 +70,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	layout, err := run.Create(".", run.NamingInput{
+	layout, err := run.Create(a.workspace, run.NamingInput{
 		Now:   time.Now(),
 		PR:    a.opts.PR,
 		Label: inputs.RunLabel(a.opts.Mode, a.opts.Base),
@@ -98,10 +104,10 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.opts.DryRun {
 		fmt.Printf("Run dir: %s\n", layout.Root)
-		fmt.Printf("Workspace: %s\n", a.workspace())
+		fmt.Printf("Workspace: %s\n", a.workspace)
 		rc := a.reviewerRunContext(layout)
 		for _, r := range reviewers {
-			expanded := run.NewContext(rc.Workspace, rc.RunDir, rc.Base, rc.Target, rc.PR).ExpandArgs(r.Args)
+			expanded := runContextFrom(rc).ExpandArgs(r.Args)
 			fmt.Printf("  %s: %s %v\n", r.ID, r.Command, expanded)
 		}
 		return nil
@@ -151,13 +157,12 @@ func (a *App) Run(ctx context.Context) error {
 	rc := a.reviewerRunContext(layout)
 	for _, r := range reviewers {
 		if err := mgr.Start(ctx, r, rc); err != nil {
-			// failed start should not abort the whole run
 			fmt.Fprintf(os.Stderr, "warning: start %s: %v\n", r.ID, err)
 		}
 	}
 
 	if a.opts.NoTUI {
-		return a.runHeadless(ctx, mgr, layout, reviewers)
+		return a.runHeadless(ctx, mgr, layout, reviewers, eventCh)
 	}
 
 	if err := tui.Run(model); err != nil {
@@ -170,37 +175,41 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) runHeadless(ctx context.Context, mgr *reviewer.Manager, layout *run.Layout, reviewers []config.Reviewer) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
+func (a *App) runHeadless(ctx context.Context, mgr *reviewer.Manager, layout *run.Layout, reviewers []config.Reviewer, eventCh <-chan reviewer.Status) error {
 	for {
+		if allSettled(mgr.Snapshot()) {
+			return a.completeHeadlessRun(ctx, layout, reviewers)
+		}
 		select {
 		case <-ctx.Done():
 			mgr.KillAll()
 			return ctx.Err()
-		case <-ticker.C:
-			if allSettled(mgr.Snapshot()) {
-				if !a.opts.SkipSynthesis {
-					if err := a.synthesize(ctx, layout, reviewers); err != nil {
-						return err
-					}
-				} else if a.opts.PR > 0 {
-					a.indexRun(layout)
-				}
-				fmt.Printf("Run complete: %s\n", layout.Root)
-				if fileExists(layout.Final) {
-					fmt.Printf("Final report: %s\n", layout.Final)
-				}
-				if a.opts.Open && fileExists(layout.Final) {
-					if err := openFile(layout.Final); err != nil {
-						return err
-					}
-				}
-				return nil
+		case _, ok := <-eventCh:
+			if !ok {
+				eventCh = nil
 			}
 		}
 	}
+}
+
+func (a *App) completeHeadlessRun(ctx context.Context, layout *run.Layout, reviewers []config.Reviewer) error {
+	if !a.opts.SkipSynthesis {
+		if err := a.synthesize(ctx, layout, reviewers); err != nil {
+			return err
+		}
+	} else if a.opts.PR > 0 {
+		a.indexRun(layout)
+	}
+	fmt.Printf("Run complete: %s\n", layout.Root)
+	if fileExists(layout.Final) {
+		fmt.Printf("Final report: %s\n", layout.Final)
+	}
+	if a.opts.Open && fileExists(layout.Final) {
+		if err := openFile(layout.Final); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) runSynthesisOnly(ctx context.Context) error {
@@ -245,29 +254,50 @@ func (a *App) synthesize(ctx context.Context, layout *run.Layout, reviewers []co
 	}
 
 	if a.opts.FakeReviewers {
-		heading := "Synthesized Review"
-		if a.opts.Rereview {
-			heading = "Re-review report"
-		}
-		script := fmt.Sprintf(`
+		return a.runFakeSynthesis(ctx, promptPath, layout)
+	}
+
+	cmd, finalTmp, err := a.buildSynthesisCommand(ctx, layout)
+	if err != nil {
+		return err
+	}
+	if err := a.streamSynthesisIO(cmd, promptPath, layout, finalTmp); err != nil {
+		return err
+	}
+	if err := promoteSynthesisOutput(finalTmp, layout.Final); err != nil {
+		return err
+	}
+	if a.opts.PR > 0 {
+		a.indexRun(layout)
+	}
+	return nil
+}
+
+func (a *App) runFakeSynthesis(ctx context.Context, promptPath string, layout *run.Layout) error {
+	heading := "Synthesized Review"
+	if a.opts.Rereview {
+		heading = "Re-review report"
+	}
+	script := fmt.Sprintf(`
 head -n 40 "$1" > "$2"
 echo "# %s" >> "$2"
 echo "" >> "$2"
 echo "Merged findings from all reviewers." >> "$2"
 `, heading)
-		cmd := exec.CommandContext(ctx, shell, "-c", script, "reviewstack", promptPath, layout.Final)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("fake synthesis: %w: %s", err, string(out))
-		}
-		if a.opts.PR > 0 {
-			a.indexRun(layout)
-		}
-		return nil
+	cmd := exec.CommandContext(ctx, shell, "-c", script, "reviewstack", promptPath, layout.Final)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("fake synthesis: %w: %s", err, string(out))
 	}
+	if a.opts.PR > 0 {
+		a.indexRun(layout)
+	}
+	return nil
+}
 
+func (a *App) buildSynthesisCommand(ctx context.Context, layout *run.Layout) (*exec.Cmd, string, error) {
 	rc := a.reviewerRunContext(layout)
-	runCtx := run.NewContext(rc.Workspace, rc.RunDir, rc.Base, rc.Target, rc.PR)
+	runCtx := runContextFrom(rc)
 	finalTmp := layout.Final + ".tmp"
 	runCtx.Final = finalTmp
 	args := runCtx.ExpandArgs(a.cfg.Synthesis.Args)
@@ -278,6 +308,10 @@ echo "Merged findings from all reviewers." >> "$2"
 	if len(a.cfg.Synthesis.Env) > 0 {
 		cmd.Env = append(os.Environ(), a.cfg.Synthesis.Env...)
 	}
+	return cmd, finalTmp, nil
+}
+
+func (a *App) streamSynthesisIO(cmd *exec.Cmd, promptPath string, layout *run.Layout, finalTmp string) error {
 	if err := os.MkdirAll(layout.Logs, 0o755); err != nil {
 		return fmt.Errorf("create synthesis log dir: %w", err)
 	}
@@ -305,12 +339,6 @@ echo "Merged findings from all reviewers." >> "$2"
 		_ = os.Remove(finalTmp)
 		return fmt.Errorf("synthesis: %w (prompt saved at %s; logs: %s, %s)", err, promptPath, stdoutPath, stderrPath)
 	}
-	if err := promoteSynthesisOutput(finalTmp, layout.Final); err != nil {
-		return err
-	}
-	if a.opts.PR > 0 {
-		a.indexRun(layout)
-	}
 	return nil
 }
 
@@ -336,7 +364,7 @@ func (a *App) gatherRereviewContext(layout *run.Layout) error {
 	if a.opts.PR <= 0 {
 		return fmt.Errorf("re-review requires a PR number")
 	}
-	runs, err := memory.LoadPR(a.workspace(), a.opts.PR)
+	runs, err := memory.LoadPR(a.workspace, a.opts.PR)
 	if err != nil {
 		return fmt.Errorf("load review memory: %w", err)
 	}
@@ -351,7 +379,7 @@ func (a *App) gatherRereviewContext(layout *run.Layout) error {
 	return rereview.Gather(layout.Inputs, rereview.Options{
 		PR:         a.opts.PR,
 		CurrentRun: layout.Root,
-		RepoRoot:   a.workspace(),
+		RepoRoot:   a.workspace,
 		PriorRun:   prior,
 	}, client)
 }
@@ -361,7 +389,7 @@ func (a *App) indexRun(layout *run.Layout) {
 		return
 	}
 	rec := memory.RecordFromRunDir(layout.Root, a.opts.PR, a.opts.Rereview)
-	if err := memory.IndexRun(a.workspace(), rec); err != nil {
+	if err := memory.IndexRun(a.workspace, rec); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: index run memory: %v\n", err)
 	}
 }
@@ -433,22 +461,34 @@ func (a *App) tuiSubject() string {
 	return "review"
 }
 
-func (a *App) workspace() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
-}
-
 func (a *App) reviewerRunContext(layout *run.Layout) reviewer.RunContext {
 	return reviewer.RunContext{
-		Workspace: a.workspace(),
+		Workspace: a.workspace,
 		RunDir:    layout.Root,
 		Base:      a.opts.Base,
 		Target:    a.opts.Target,
 		PR:        a.opts.PR,
+		Mode:      reviewModeString(a.opts.Mode),
 	}
+}
+
+func reviewModeString(mode cli.ReviewMode) string {
+	switch mode {
+	case cli.ModeUncommitted:
+		return "uncommitted"
+	case cli.ModeBranch:
+		return "branch"
+	default:
+		return "pr"
+	}
+}
+
+func runContextFrom(rc reviewer.RunContext) run.Context {
+	ctx := run.NewContext(rc.Workspace, rc.RunDir, rc.Base, rc.Target, rc.PR)
+	if rc.Mode != "" {
+		ctx.Mode = rc.Mode
+	}
+	return ctx
 }
 
 // ResolveConfigPath returns the first existing config path.

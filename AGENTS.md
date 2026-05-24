@@ -49,7 +49,7 @@ internal/
 
 - `claude-aesthetic` — `/aesthetic-review`
 - `claude-analytical` — `/analytical-review`
-- `codex-medium`, `codex-xhigh`, `cursor-thermo`
+- `codex-medium`, `codex-xhigh`, `claude-thermo`
 
 ## Real runs
 
@@ -74,7 +74,7 @@ REVIEWSTACK_INTEGRATION=1 go test ./internal/app -run TestHeadlessFakeRun
 |-------|-----|
 | `files need formatting` | `make fmt` |
 | golangci-lint errcheck on `Close()` | use `_ = f.Close()` |
-| missing CLI tools | use `--fake-reviewers` for dev, or install claude/codex/cursor-agent |
+| missing CLI tools | use `--fake-reviewers` for dev, or install the CLIs referenced by `.reviewstack/config.yaml` |
 
 ## Do not
 

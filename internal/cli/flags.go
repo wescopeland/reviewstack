@@ -2,9 +2,13 @@ package cli
 
 import (
 	"flag"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var prURLPattern = regexp.MustCompile(`/pull/(\d+)`)
 
 type Options struct {
 	PR             int
@@ -93,19 +97,16 @@ func parsePR(v string) (int, bool) {
 	if n, err := strconv.Atoi(v); err == nil {
 		return n, true
 	}
-	// https://github.com/org/repo/pull/4914[/files][?tab=files]
-	if i := strings.LastIndex(v, "/pull/"); i >= 0 {
-		rest := v[i+6:]
-		end := len(rest)
-		for j, c := range rest {
-			if c == '/' || c == '?' || c == '#' {
-				end = j
-				break
-			}
-		}
-		n, err := strconv.Atoi(rest[:end])
-		if err == nil {
+	if m := prURLPattern.FindStringSubmatch(v); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil {
 			return n, true
+		}
+	}
+	if u, err := url.Parse(v); err == nil {
+		if m := prURLPattern.FindStringSubmatch(u.Path); len(m) == 2 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				return n, true
+			}
 		}
 	}
 	return 0, false

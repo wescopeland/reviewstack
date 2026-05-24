@@ -5,8 +5,12 @@ reviewers:
       - --print
       - --permission-mode
       - dontAsk
-      - /aesthetic-review
-      - "{{pr}}"
+      - >-
+        /aesthetic-review Review {{target_description}} using the Reviewstack inputs. Ignore any empty
+        local git diff from the slash-command context; the captured diff is the source of truth.
+        Read {{inputs}}/context.json, {{inputs}}/diff.patch, and {{inputs}}/diff-stat.txt, then write
+        a markdown review to stdout with findings, severity, concrete fixes, and file/line references
+        where possible.
 
   - id: claude-analytical
     command: claude
@@ -14,13 +18,18 @@ reviewers:
       - --print
       - --permission-mode
       - dontAsk
-      - /analytical-review
-      - "{{pr}}"
+      - >-
+        /analytical-review Review {{target_description}} using the Reviewstack inputs. Ignore any empty
+        local git diff from the slash-command context; the captured diff is the source of truth.
+        Read {{inputs}}/context.json, {{inputs}}/diff.patch, and {{inputs}}/diff-stat.txt, then write
+        a markdown review to stdout with findings, severity, concrete fixes, and file/line references
+        where possible.
 
   - id: codex-medium
     command: codex
     args:
       - review
+      - "{{review_target_flags}}"
       - >-
         Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json
         and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings,
@@ -36,6 +45,7 @@ reviewers:
     command: codex
     args:
       - review
+      - "{{review_target_flags}}"
       - >-
         Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json
         and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings,
@@ -47,18 +57,18 @@ reviewers:
       - -c
       - service_tier="fast"
 
-  - id: cursor-thermo
-    command: cursor-agent
+  - id: claude-thermo
+    command: claude
     args:
       - --print
-      - --trust
-      - --force
+      - --permission-mode
+      - dontAsk
       - --model
-      - composer-2.5-fast
+      - opus
       - --output-format
       - text
       - >-
-        Thermonuclear maintainability review of uncommitted/local changes.
+        Thermonuclear maintainability review of {{target_description}}.
         Read {{inputs}}/diff.patch, {{inputs}}/context.json, and {{inputs}}/diff-stat.txt.
         Focus on coupling, abstraction depth, naming, and long-term maintainability.
         Write a markdown review to stdout with findings, severity, and concrete fixes.

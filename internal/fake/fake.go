@@ -36,7 +36,7 @@ echo "inspecting schema" >&2
 for i in 1 2 3; do echo "deep trace $i" >&2; sleep 1; done
 echo "XHigh: race in concurrent map access"
 `}, nil
-	case "cursor-thermo":
+	case "claude-thermo":
 		return shell, []string{"-c", `
 sleep 1
 echo "# Thermonuclear maintainability review"
@@ -49,27 +49,25 @@ echo "1 finding"
 }
 
 func Config() *config.Config {
-	ids := config.DefaultReviewerIDs
-	reviewers := make([]config.Reviewer, 0, len(ids))
-	for _, id := range ids {
-		cmd, args, err := ReviewerScript(id)
+	cfg := config.Default()
+	for i := range cfg.Reviewers {
+		cmd, args, err := ReviewerScript(cfg.Reviewers[i].ID)
 		if err != nil {
 			continue
 		}
-		reviewers = append(reviewers, config.Reviewer{ID: id, Command: cmd, Args: args})
+		cfg.Reviewers[i].Command = cmd
+		cfg.Reviewers[i].Args = args
 	}
-	return &config.Config{
-		Reviewers: reviewers,
-		Synthesis: config.Synthesis{
-			Command: shell,
-			Args: []string{"-c", `
+	cfg.Synthesis = config.Synthesis{
+		Command: shell,
+		Args: []string{"-c", `
 cat "$1" | head -n 40 > "$2"
 echo "# Synthesized Review" >> "$2"
 echo "" >> "$2"
 echo "Merged findings from all reviewers." >> "$2"
 `, "$1", "$2"},
-		},
 	}
+	return cfg
 }
 
 func ConfigWithSlow(id string, delay time.Duration) *config.Config {

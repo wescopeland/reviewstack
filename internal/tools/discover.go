@@ -18,7 +18,6 @@ func Discover(cfgReviewerCommands []string, cfgSynthCommand string, needGH bool)
 	reqs := map[string]*Requirement{
 		"claude": {Name: "claude", Commands: []string{"claude"}, Required: false},
 		"codex":  {Name: "codex", Commands: []string{"codex"}, Required: false},
-		"cursor": {Name: "cursor", Commands: []string{"cursor-agent", "agents"}, Required: false},
 		"gh":     {Name: "gh", Commands: []string{"gh"}, Required: false},
 	}
 
@@ -29,8 +28,6 @@ func Discover(cfgReviewerCommands []string, cfgSynthCommand string, needGH bool)
 			reqs["claude"].Required = true
 		case "codex":
 			reqs["codex"].Required = true
-		case "cursor-agent", "agents":
-			reqs["cursor"].Required = true
 		}
 	}
 	base := filepathBase(cfgSynthCommand)
@@ -42,7 +39,7 @@ func Discover(cfgReviewerCommands []string, cfgSynthCommand string, needGH bool)
 	}
 
 	out := make([]Requirement, 0, len(reqs))
-	order := []string{"claude", "codex", "cursor", "gh"}
+	order := []string{"claude", "codex", "gh"}
 	for _, key := range order {
 		r := reqs[key]
 		r.Available = firstAvailable(r.Commands)

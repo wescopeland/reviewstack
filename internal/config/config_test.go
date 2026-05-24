@@ -69,3 +69,25 @@ func TestFilterReviewersUnknownID(t *testing.T) {
 		t.Fatal("expected error for unknown reviewer id")
 	}
 }
+
+func TestDefaultClaudeReviewersUseCapturedInputs(t *testing.T) {
+	cfg := config.Default()
+	for _, id := range []string{"claude-aesthetic", "claude-analytical"} {
+		r, err := cfg.ReviewerByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prompt := r.Args[len(r.Args)-1]
+		for _, want := range []string{"{{inputs}}/context.json", "{{inputs}}/diff.patch", "{{inputs}}/diff-stat.txt"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("%s prompt missing %s: %q", id, want, prompt)
+			}
+		}
+		if !strings.Contains(prompt, "captured diff is the source of truth") {
+			t.Fatalf("%s prompt should force Reviewstack diff as source of truth: %q", id, prompt)
+		}
+		if prompt == "{{pr}}" {
+			t.Fatalf("%s prompt must not be a bare PR placeholder", id)
+		}
+	}
+}

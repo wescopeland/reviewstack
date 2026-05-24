@@ -81,24 +81,11 @@ func Assemble(in Input) (string, error) {
 	b.WriteString("\n---\n\n")
 
 	if in.Rereview {
-		rereviewPath := filepath.Join(in.RunDir, "inputs", "rereview-context.json")
-		if data, err := os.ReadFile(rereviewPath); err == nil {
-			b.WriteString("## Re-review Context\n\n")
-			writeFenced(&b, "json", promptText(data, maxRawPromptBytes))
-		}
+		writeFileSection(&b, "Re-review Context", "json", filepath.Join(in.RunDir, "inputs", "rereview-context.json"), maxRawPromptBytes)
 	}
 
-	contextPath := filepath.Join(in.RunDir, "inputs", "context.json")
-	if data, err := os.ReadFile(contextPath); err == nil {
-		b.WriteString("## PR Context\n\n")
-		writeFenced(&b, "json", promptText(data, maxRawPromptBytes))
-	}
-
-	statPath := filepath.Join(in.RunDir, "inputs", "diff-stat.txt")
-	if data, err := os.ReadFile(statPath); err == nil {
-		b.WriteString("## Diff Stat\n\n")
-		writeFenced(&b, "", promptText(data, maxRawPromptBytes))
-	}
+	writeFileSection(&b, "PR Context", "json", filepath.Join(in.RunDir, "inputs", "context.json"), maxRawPromptBytes)
+	writeFileSection(&b, "Diff Stat", "", filepath.Join(in.RunDir, "inputs", "diff-stat.txt"), maxRawPromptBytes)
 
 	for _, id := range in.Reviewers {
 		p, ok := in.Paths[id]
@@ -131,6 +118,15 @@ func Assemble(in Input) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+func writeFileSection(b *strings.Builder, label, lang, path string, limit int) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(b, "## %s\n\n", label)
+	writeFenced(b, lang, promptText(data, limit))
 }
 
 func readPromptFile(path string, limit int) (string, error) {
@@ -195,6 +191,8 @@ func binaryLike(line string) bool {
 		return false
 	}
 
+	// Long lines with a high ratio of control characters are usually binary
+	// or corrupted tool output, not review text worth sending to the model.
 	controlCount := 0
 	for _, r := range line {
 		switch r {

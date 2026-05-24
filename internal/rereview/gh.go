@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // GHClient uses the gh CLI for GitHub API access.
@@ -21,14 +22,7 @@ func (c *GHClient) ViewerLogin() (string, error) {
 		}
 		return "", fmt.Errorf("gh api user: %w", err)
 	}
-	login := string(out)
-	if login == "" {
-		return "", fmt.Errorf("empty login from gh api user")
-	}
-	// trim newline from jq output
-	for len(login) > 0 && (login[len(login)-1] == '\n' || login[len(login)-1] == '\r') {
-		login = login[:len(login)-1]
-	}
+	login := strings.TrimSpace(string(out))
 	if login == "" {
 		return "", fmt.Errorf("empty login from gh api user")
 	}

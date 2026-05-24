@@ -23,6 +23,7 @@ type RunContext struct {
 	Base      string
 	Target    string
 	PR        int
+	Mode      string
 }
 
 type Status struct {
@@ -139,19 +140,25 @@ func (m *Manager) Start(parent context.Context, r config.Reviewer, rc RunContext
 		return fmt.Errorf("create log file: %w", err)
 	}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
+	cleanup := func() {
 		_ = rawFile.Close()
 		_ = logFile.Close()
 		cancel()
+	}
+	success := false
+	defer func() {
+		if !success {
+			cleanup()
+		}
+	}()
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
 		m.finish(r.ID, StateFailed, -1, err.Error())
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		_ = rawFile.Close()
-		_ = logFile.Close()
-		cancel()
 		m.finish(r.ID, StateFailed, -1, err.Error())
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
@@ -166,12 +173,10 @@ func (m *Manager) Start(parent context.Context, r config.Reviewer, rc RunContext
 	m.emit(r.ID)
 
 	if err := cmd.Start(); err != nil {
-		_ = rawFile.Close()
-		_ = logFile.Close()
-		cancel()
 		m.finish(r.ID, StateFailed, -1, err.Error())
 		return err
 	}
+	success = true
 
 	go func() {
 		<-ctx.Done()
@@ -338,17 +343,6 @@ func (m *Manager) KillAll() {
 	}
 }
 
-// SetStatusForTest overrides a reviewer's state. It is intended for tests.
-func (m *Manager) SetStatusForTest(id string, state State) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	st, ok := m.status[id]
-	if !ok {
-		return
-	}
-	st.State = state
-}
-
 func (m *Manager) Reset(id string) error {
 	m.mu.Lock()
 	st, ok := m.status[id]
@@ -356,12 +350,11 @@ func (m *Manager) Reset(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("reviewer %q not found", id)
 	}
-	next, ok := Transition(st.State, EventReset)
-	if !ok {
+	if st.State != StateDone && st.State != StateFailed && st.State != StateKilled {
 		m.mu.Unlock()
 		return fmt.Errorf("reviewer %q cannot reset from %s", id, st.State)
 	}
-	st.State = next
+	st.State = StatePending
 	st.StartedAt = time.Time{}
 	st.FinishedAt = time.Time{}
 	st.RawBytes = 0
@@ -394,7 +387,11 @@ func (m *Manager) emitStatus(st Status) {
 }
 
 func runContextFrom(rc RunContext) run.Context {
-	return run.NewContext(rc.Workspace, rc.RunDir, rc.Base, rc.Target, rc.PR)
+	ctx := run.NewContext(rc.Workspace, rc.RunDir, rc.Base, rc.Target, rc.PR)
+	if rc.Mode != "" {
+		ctx.Mode = rc.Mode
+	}
+	return ctx
 }
 
 func readLastLine(path string) string {

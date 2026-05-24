@@ -49,7 +49,7 @@ func TestHeadlessFakeRun(t *testing.T) {
 	runDir := runs[0]
 	for _, rel := range []string{
 		"raw/claude-aesthetic.md",
-		"logs/cursor-thermo.err",
+		"logs/claude-thermo.err",
 		"final-review.md",
 	} {
 		if _, err := os.Stat(filepath.Join(runDir, rel)); err != nil {
