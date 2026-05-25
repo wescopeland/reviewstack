@@ -218,7 +218,7 @@ func checkCodexMCP() Check {
 	}
 	probe, _ := exec.Command(
 		"sh", "-c",
-		`timeout 8 codex review --uncommitted -c 'model="gpt-5.5"' 2>&1 | head -20`,
+		`timeout 8 codex review -c 'model="gpt-5.5"' 'Check Codex reviewer auth and MCP health.' 2>&1 | head -20`,
 	).CombinedOutput()
 	if strings.Contains(string(probe), "rmcp::transport::worker") {
 		return Check{

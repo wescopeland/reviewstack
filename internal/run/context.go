@@ -78,8 +78,5 @@ func (c Context) targetDescription() string {
 }
 
 func (c Context) reviewTargetFlags() string {
-	if c.Mode == "uncommitted" {
-		return "--uncommitted"
-	}
 	return ""
 }

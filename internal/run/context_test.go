@@ -46,7 +46,7 @@ func TestExpandReviewTargetFlags(t *testing.T) {
 	uncommitted := run.NewContext("/repo", "/repo/run", "HEAD", "working tree", 0)
 	uncommitted.Mode = "uncommitted"
 	got := uncommitted.ExpandArgs([]string{"review", "{{review_target_flags}}", "prompt"})
-	if len(got) != 3 || got[1] != "--uncommitted" {
+	if len(got) != 2 || got[1] != "prompt" {
 		t.Fatalf("uncommitted args = %v", got)
 	}
 }

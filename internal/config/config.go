@@ -133,8 +133,8 @@ func Default() *Config {
 				Args: []string{
 					"review",
 					"{{review_target_flags}}",
-					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 					"-c", `model="gpt-5.5"`, "-c", `model_reasoning_effort="medium"`, "-c", `service_tier="fast"`,
+					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 				},
 			},
 			{
@@ -143,8 +143,8 @@ func Default() *Config {
 				Args: []string{
 					"review",
 					"{{review_target_flags}}",
-					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 					"-c", `model="gpt-5.5"`, "-c", `model_reasoning_effort="xhigh"`, "-c", `service_tier="fast"`,
+					"Review the changes in {{inputs}}/diff.patch using context from {{inputs}}/context.json and stats from {{inputs}}/diff-stat.txt. Write a markdown review to stdout with findings, severity, and concrete fixes.",
 				},
 			},
 			{

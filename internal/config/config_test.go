@@ -91,3 +91,28 @@ func TestDefaultClaudeReviewersUseCapturedInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultCodexReviewersPutOptionsBeforePrompt(t *testing.T) {
+	cfg := config.Default()
+	for _, id := range []string{"codex-medium", "codex-xhigh"} {
+		r, err := cfg.ReviewerByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		promptIndex := -1
+		for i, arg := range r.Args {
+			if strings.HasPrefix(arg, "Review the changes in ") {
+				promptIndex = i
+				break
+			}
+		}
+		if promptIndex == -1 {
+			t.Fatalf("%s missing review prompt in args: %#v", id, r.Args)
+		}
+		for i, arg := range r.Args {
+			if arg == "-c" && i > promptIndex {
+				t.Fatalf("%s has Codex option after prompt: %#v", id, r.Args)
+			}
+		}
+	}
+}
